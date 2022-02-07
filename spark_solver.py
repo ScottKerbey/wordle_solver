@@ -13,6 +13,7 @@ import pandas as pd
 # COMMAND ----------
 
 spark.conf.set("spark.sql.execution.arrow.enabled", "true")
+spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 
 # COMMAND ----------
 
@@ -28,31 +29,21 @@ dictionary
 
 # COMMAND ----------
 
-# # Load the dictionary from file as a list
-# with open("/dbfs/FileStore/tables/dictionary.txt",'r') as f:
-#     dictionary = [line.strip() for line in f]
-
-# COMMAND ----------
-
-empty_list = [[dictionary[0],i] for i in dictionary]
-
-# COMMAND ----------
-
-len(empty_list), len(dictionary)
+# empty_list = [[dictionary[0],i] for i in dictionary]
 
 # COMMAND ----------
 
 # create an emtpy spark dataframe with the dictionary as the column names
-matrix_df = spark.createDataFrame([empty_list], schema=dictionary)
+# matrix_df = spark.createDataFrame([empty_list], schema=dictionary)
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC DROP TABLE wordle.dict_matrix
+# %sql
+# DROP TABLE wordle.dict_matrix
 
 # COMMAND ----------
 
-matrix_df.write.saveAsTable("wordle.dict_matrix")
+# matrix_df.write.saveAsTable("wordle.dict_matrix")
 
 # COMMAND ----------
 
@@ -219,119 +210,119 @@ info = ['a', 'c', 'p', 'a', 'a']
 
 # COMMAND ----------
 
-pmatrix_df = matrix_df
-col = dictionary[0]
-pmatrix_df = pmatrix_df.withColumn(col, udf_dict_red(col))
+# MAGIC %md ### Create master table
 
 # COMMAND ----------
 
-pmatrix_df = matrix_df
-for col in dictionary:
-    pmatrix_df = pmatrix_df.withColumn(col, udf_dict_red(col))
-pmatrix_df.select(dictionary[:10]).show()
+data = [[word] for word in dictionary]
+
+schema = StructType([StructField("guess_word",StringType(),True)])
+
+matrix_df = spark.createDataFrame(data,schema)
 
 # COMMAND ----------
 
-test_list = list(zip(dictionary, list(zip(dictionary, [dictionary[0]]*len(dictionary)))))
-test_list
+matrix_df.show()
 
 # COMMAND ----------
 
-test_df = spark.createDataFrame(test_list, schema=['guess', dictionary[0]])
+table_name = 'wordle.matrix_table'
+table_format = 'delta'
+save_path = '/tmp/delta/wordle.matrix_table'
 
-# COMMAND ----------
+matrix_df.write \
+  .format(table_format) \
+  .save(save_path, mode='overwrite')
 
-col = dictionary[0]
-test_df = test_df.withColumn(col, udf_dict_red(col))
-
-# COMMAND ----------
-
-test_df.show()
-
-# COMMAND ----------
-
-test_df.createOrReplaceTempView('new_col')
-
-# COMMAND ----------
-
-schema = StructType([StructField("guess_word",StringType(),True),] + [StructField(word,ArrayType(StringType()), True) for word in dictionary])
-
-# COMMAND ----------
-
-schema
-
-# COMMAND ----------
-
-emptyRDD = spark.sparkContext.emptyRDD()
-
-reduced_dict_df = spark.createDataFrame(emptyRDD,schema)
-
-# COMMAND ----------
-
-reduced_dict_df.show()
+# Create the table.
+spark.sql("CREATE TABLE IF NOT EXISTS " + table_name + " USING DELTA LOCATION '" + save_path + "'")
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC DROP TABLE wordle.reduced_dict
+# MAGIC SELECT *
+# MAGIC FROM wordle.matrix_table
 
 # COMMAND ----------
 
-reduced_dict_df.write.saveAsTable("wordle.reduced_dict")
+# MAGIC %md ### Create a dataframe with the new column
+
+# COMMAND ----------
+
+col = dictionary[3]
+data = [[word, (word,col)] for word in dictionary]
+
+schema2 = StructType([StructField("guess_word",StringType(),True),] + [StructField(col,ArrayType(StringType()), True)])
+
+new_col_df = spark.createDataFrame(data,schema2)
+
+# COMMAND ----------
+
+new_col_df.show()
+
+# COMMAND ----------
+
+# col = dictionary[0]
+new_col_df = new_col_df.withColumn(col, udf_dict_red(col))
+
+# COMMAND ----------
+
+new_col_df.createOrReplaceTempView('new_col')
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC DESCRIBE wordle.reduced_dict
+# MAGIC SELECT *
+# MAGIC FROM new_col
 
 # COMMAND ----------
 
-guess_col_df = spark.createDataFrame([[word] for word in dictionary]).withColumnRenamed('_1', 'guess_word')
-
-# COMMAND ----------
-
-guess_col_df.show()
-
-# COMMAND ----------
-
-guess_col_df.createOrReplaceTempView('guess_col')
-
-# COMMAND ----------
-
-INSERT INTO tableName SELECT t.* FROM (SELECT value1, value2, ... ) t;
-
-# COMMAND ----------
-
-", ".join(['a','b','c'])
+# MAGIC %md ### Merge into master table
 
 # COMMAND ----------
 
 spark.sql(f'''
-INSERT INTO wordle.reduced_dict
-SELECT guess_word, {", ".join(['null']*len(dictionary))}
-FROM guess_col
+MERGE INTO wordle.matrix_table t1
+USING new_col t2
+ON t1.guess_word = t2.guess_word
+WHEN MATCHED THEN UPDATE SET *
 ''')
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC SELECT *
-# MAGIC FROM wordle.reduced_dict
+# MAGIC FROM wordle.matrix_table
+
+# COMMAND ----------
+
+# MAGIC %md # Run Loop
+
+# COMMAND ----------
+
+start = 10
+for index, col in enumerate(dictionary[start:]):
+  print(f"Processing column {start + index}: {col}")
+  data = [[word, (word,col)] for word in dictionary]
+
+  schema2 = StructType([StructField("guess_word",StringType(),True),] + [StructField(col,ArrayType(StringType()), True)])
+
+  new_col_df = spark.createDataFrame(data,schema2)
+  new_col_df = new_col_df.withColumn(col, udf_dict_red(col))
+  new_col_df.createOrReplaceTempView('new_col')
+
+  spark.sql(f'''
+  MERGE INTO wordle.matrix_table t1
+  USING new_col t2
+  ON t1.guess_word = t2.guess_word
+  WHEN MATCHED THEN UPDATE SET *
+  ''')
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC SELECT rd.guess_word, new_col.aahed
-# MAGIC FROM wordle.reduced_dict rd
-# MAGIC INNER JOIN new_col ON rd.guess_word = new_col.guess
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC INSERT INTO wordle.reduced_dict (aahed)
-# MAGIC SELECT new_col.aahed
-# MAGIC FROM new_col
-# MAGIC WHERE wordle.reduced_dict = new_col.guess
+# MAGIC SELECT *
+# MAGIC FROM wordle.matrix_table
 
 # COMMAND ----------
 
