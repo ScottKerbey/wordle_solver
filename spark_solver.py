@@ -249,10 +249,10 @@ spark.sql("CREATE TABLE IF NOT EXISTS " + table_name + " USING DELTA LOCATION '"
 
 # COMMAND ----------
 
-col = dictionary[3]
-data = [[word, (word,col)] for word in dictionary]
+cols = dictionary[10:20]
+data = [[word] + [(word,col) for col in cols] for word in dictionary]
 
-schema2 = StructType([StructField("guess_word",StringType(),True),] + [StructField(col,ArrayType(StringType()), True)])
+schema2 = StructType([StructField("guess_word",StringType(),True),] + [StructField(col,ArrayType(StringType()), True) for col in cols])
 
 new_col_df = spark.createDataFrame(data,schema2)
 
@@ -263,7 +263,8 @@ new_col_df.show()
 # COMMAND ----------
 
 # col = dictionary[0]
-new_col_df = new_col_df.withColumn(col, udf_dict_red(col))
+for col in cols:
+  new_col_df = new_col_df.withColumn(col, udf_dict_red(col))
 
 # COMMAND ----------
 
@@ -300,13 +301,51 @@ WHEN MATCHED THEN UPDATE SET *
 
 # COMMAND ----------
 
-start = 10
-for index, col in enumerate(dictionary[start:]):
-  print(f"Processing column {start + index}: {col}")
-  data = [[word, (word,col)] for word in dictionary]
+len(dictionary)
 
+# COMMAND ----------
+
+start = 20
+list(range(20,len(dictionary),10))[-10:]
+
+# COMMAND ----------
+
+import time
+
+# COMMAND ----------
+
+start = 20
+for batch_start in range(20,len(dictionary),10):
+  start_time = time.time()
+  batch_end = min(batch_start+10,len(dictionary))
+  cols = dictionary[batch_start:batch_end]
+  print(f"Processing columns {batch_start} - {batch_end}: {cols}")
+  
+  data = [[word] + [(word,col) for col in cols] for word in dictionary]
+  schema2 = StructType([StructField("guess_word",StringType(),True),] + [StructField(col,ArrayType(StringType()), True) for col in cols])
+  new_col_df = spark.createDataFrame(data,schema2)
+  for col in cols:
+    new_col_df = new_col_df.withColumn(col, udf_dict_red(col))
+  new_col_df.createOrReplaceTempView('new_col')
+
+  spark.sql(f'''
+  MERGE INTO wordle.matrix_table t1
+  USING new_col t2
+  ON t1.guess_word = t2.guess_word
+  WHEN MATCHED THEN UPDATE SET *
+  ''')
+  
+  end_time = time.time()
+  print('Took {:.2f} seconds'.format(end_time - start_time))
+
+# COMMAND ----------
+
+for index, col in enumerate(dictionary):
+  start_time = time.time()
+  print(f"Processing column: {col}")
+  
+  data = [[word] + [(word,col)]] for word in dictionary]
   schema2 = StructType([StructField("guess_word",StringType(),True),] + [StructField(col,ArrayType(StringType()), True)])
-
   new_col_df = spark.createDataFrame(data,schema2)
   new_col_df = new_col_df.withColumn(col, udf_dict_red(col))
   new_col_df.createOrReplaceTempView('new_col')
@@ -317,6 +356,9 @@ for index, col in enumerate(dictionary[start:]):
   ON t1.guess_word = t2.guess_word
   WHEN MATCHED THEN UPDATE SET *
   ''')
+  
+  end_time = time.time()
+  print('Took {:.2f} seconds'.format(end_time - start_time))
 
 # COMMAND ----------
 
